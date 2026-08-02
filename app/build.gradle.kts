@@ -7,6 +7,12 @@ android {
     namespace = "com.hubery.dynamicislandport"
     compileSdk = 34
 
+    sourceSets {
+        getByName("main") {
+            resources.srcDirs("src/main/resources")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.hubery.dynamicislandport"
         minSdk = 34

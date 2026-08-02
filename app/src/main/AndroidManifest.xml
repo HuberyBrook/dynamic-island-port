@@ -1,11 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- LSPosed module: no launcher needed -->
     <application
         android:allowBackup="false"
         android:supportsRtl="true">
 
-        <!-- Xposed module entry: triggers settings UI category -->
+        <!-- libxposed v2 module entry: XposedProvider discovers ModuleInit -->
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="${applicationId}.xposed"
+            android:exported="true" />
+
+        <!-- Xposed module metadata -->
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
@@ -18,7 +23,7 @@
             android:name="xposedminversion"
             android:value="100" />
 
-        <!-- Scope: only hook SystemUI process, not all apps -->
+        <!-- Recommended scope: only SystemUI needs hooking -->
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />
