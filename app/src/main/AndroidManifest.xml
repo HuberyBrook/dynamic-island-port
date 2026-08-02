@@ -4,13 +4,20 @@
         android:allowBackup="false"
         android:supportsRtl="true">
 
-        <!-- libxposed v2 module entry -->
-        <provider
-            android:name="io.github.libxposed.service.XposedProvider"
-            android:authorities="${applicationId}.xposed"
-            android:exported="true" />
+        <!-- Legacy Xposed module -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
 
-        <!-- LSPosed scope recommendation -->
+        <meta-data
+            android:name="xposeddescription"
+            android:value="Port A16 Dynamic Island (Super Island) features to A15 System UI" />
+
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+
+        <!-- Recommended scope -->
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />
