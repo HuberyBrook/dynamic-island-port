@@ -18,7 +18,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -32,4 +31,11 @@ android {
     }
 }
 
-// No external dependencies — Xposed API stubs are in src/main/java/de/robv/android/xposed/
+repositories {
+    maven { url = uri("https://jitpack.io") }
+}
+
+dependencies {
+    // Xposed API — compileOnly, NOT packaged in APK
+    compileOnly("com.github.rovo89:XposedBridge:v89")
+}
