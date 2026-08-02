@@ -32,8 +32,4 @@ android {
     }
 }
 
-dependencies {
-    // Xposed API stubs — provided at runtime by LSPosed
-    // Downloaded in CI; place api-82.jar in app/libs/ for local builds
-    compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
-}
+// No external dependencies — Xposed API stubs are in src/main/java/de/robv/android/xposed/
