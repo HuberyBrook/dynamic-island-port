@@ -26,6 +26,12 @@ jobs:
           ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-34" "build-tools;34.0.0" 2>/dev/null || true
           echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
 
+      - name: Download Xposed API stubs
+        run: |
+          mkdir -p app/libs
+          curl -L -o app/libs/api-82.jar \
+            "https://github.com/rovo89/XposedBridge/releases/download/v89/api-82.jar"
+
       - name: Generate Gradle Wrapper
         run: gradle wrapper --gradle-version 8.5
 

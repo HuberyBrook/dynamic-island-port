@@ -33,6 +33,7 @@ android {
 }
 
 dependencies {
-    // LSPosed / libxposed API
-    compileOnly("io.github.libxposed:api:100.2")
+    // Xposed API stubs — provided at runtime by LSPosed
+    // Downloaded in CI; place api-82.jar in app/libs/ for local builds
+    compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
 }
