@@ -95,7 +95,7 @@ object FeatureFlagEnabler {
             // Hook getBoolean / any method that reads feature flags
             // We hook all methods named "get*" and intercept island-related keys
             for (method in configClass.declaredMethods) {
-                if (method.returnType == Boolean.TYPE && method.parameterTypes.isEmpty()) {
+                if (method.returnType == java.lang.Boolean.TYPE && method.parameterTypes.isEmpty()) {
                     val name = method.name.lowercase()
                     if ("freeform" in name || "liveupdate" in name) {
                         XposedHelpers.hookMethod(method, object : XC_MethodHook() {

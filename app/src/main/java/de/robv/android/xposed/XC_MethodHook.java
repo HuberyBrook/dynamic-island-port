@@ -11,16 +11,11 @@ public abstract class XC_MethodHook {
     protected void afterHookedMethod(MethodHookParam param) throws Throwable {}
 
     public static final class MethodHookParam {
-        public Member method;
+        public java.lang.reflect.Member method;
         public Object thisObject;
         public Object[] args;
-        private Object result;
-        private Throwable throwable;
-
-        public Object getResult() { return result; }
-        public void setResult(Object result) { this.result = result; }
-        public Throwable getThrowable() { return throwable; }
-        public void setThrowable(Throwable t) { this.throwable = t; }
+        public Object result;
+        public Throwable throwable;
     }
 
     public static class Unhook {
