@@ -31,10 +31,6 @@ android {
     }
 }
 
-repositories {
-    maven { url = uri("https://jitpack.io") }
-}
-
 dependencies {
     // Xposed API — compileOnly, NOT packaged in APK
     compileOnly("com.github.rovo89:XposedBridge:v89")
