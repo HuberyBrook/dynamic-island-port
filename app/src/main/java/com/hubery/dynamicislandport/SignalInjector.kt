@@ -69,8 +69,45 @@ object SignalInjector {
                     }
                 })
             XposedBridge.log("DynamicIslandPort: receiver hooked")
+
+            // Proactively send width data — the original bundle was already processed
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                sendWidthBundle(pcl, vcClass)
+            }, 1000)
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: hook err — ${e.message}")
+        }
+    }
+
+    private fun sendWidthBundle(pcl: ClassLoader, vcClass: Class<*>) {
+        if (clockWidth <= 0f) {
+            XposedBridge.log("DynamicIslandPort: no widths yet, skip")
+            return
+        }
+        try {
+            val bundle = Bundle().apply {
+                putString("action_key", "action_island_max_width")
+                putFloat("extra_island_max_width", 2560f)
+                putFloat("extra_island_clock_width", clockWidth)
+                putFloat("extra_island_battery_width", batteryWidth)
+            }
+            // Get ViewController instance via WindowManager
+            val wmg = Class.forName("android.view.WindowManagerGlobal")
+            val inst = wmg.getDeclaredMethod("getInstance").invoke(null)
+            val f = wmg.getDeclaredField("mViews"); f.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            for (root in f.get(inst) as? List<android.view.View> ?: emptyList()) {
+                val wvClass = pcl.loadClass(
+                    "miui.systemui.dynamicisland.window.DynamicIslandWindowView")
+                if (wvClass.isInstance(root)) {
+                    val vc = XposedHelpers.getObjectField(root, "viewController")
+                    XposedHelpers.callMethod(vc, "handleDynamicIsland", bundle)
+                    XposedBridge.log("DynamicIslandPort: width sent cw=$clockWidth bw=$batteryWidth")
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: send err — ${e.message}")
         }
     }
 }
