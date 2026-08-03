@@ -6,123 +6,78 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Adds phone-version Dynamic Island signals to trigger plugin animations.
+ * Injects missing island dimension signals that the phone SystemUI sends
+ * but the tablet SystemUI doesn't.
  *
- * The island plugin (v16.5.3.14.0 on device) supports rich animations
- * (water ripple, hourglass, recorder, etc.) but needs specific bundle
- * signals that only the phone SystemUI sends. We inject those signals.
+ * The device's island plugin (v16.5.3.14.0) reads these bundle keys:
+ *   action_island_max_width  → extra_island_max_width (Float)
+ *                               extra_island_clock_width (Float)
+ *                               extra_island_battery_width (Float)
+ *
+ * These control how the plugin positions animations relative to the
+ * clock and battery in the status bar.
  */
 object DynamicIslandEnhancer {
 
     fun hook(classLoader: ClassLoader) {
         hookStart(classLoader)
-        hookSetMaxIslandWidth(classLoader)
-        hookPluginCallback(classLoader)
     }
 
-    // ── Signal 1: action_update_island_dimen_data ──────────────────────
-
+    /**
+     * After DynamicIslandController.start(), wait briefly for the plugin
+     * to load, then send the action_island_max_width bundle with clock
+     * and battery widths so the plugin can position scene animations.
+     */
     private fun hookStart(classLoader: ClassLoader) {
         val clz = XposedHelpers.findClass(
             "com.android.systemui.statusbar.notification.DynamicIslandController", classLoader)
 
         XposedHelpers.findAndHookMethod(clz, "start", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
-                try { sendDimenData(param.thisObject) }
-                catch (e: Exception) {
-                    XposedBridge.log("DynamicIslandPort: dimen error — ${e.message}")
+                // Post to handler so the plugin has time to load first
+                try {
+                    val handler = XposedHelpers.getObjectField(param.thisObject, "mMainHandler")
+                        as? android.os.Handler
+                    handler?.postDelayed({ sendWidthBundle(param.thisObject) }, 500)
+                } catch (e: Exception) {
+                    XposedBridge.log("DynamicIslandPort: width hook err — ${e.message}")
                 }
             }
         })
     }
 
-    // ── Signal 2: extra_island_clock/battery_width ─────────────────────
+    private fun sendWidthBundle(controller: Any) {
+        try {
+            val pc = XposedHelpers.getObjectField(controller,
+                "dynamicIslandPluginController")
+            val content = XposedHelpers.callMethod(pc, "getContent") ?: return
 
-    private fun hookSetMaxIslandWidth(classLoader: ClassLoader) {
-        val clz = XposedHelpers.findClass(
-            "com.android.systemui.statusbar.notification.DynamicIslandController", classLoader)
+            val ic = XposedHelpers.getObjectField(controller, "islandControllerImp")
 
-        XposedHelpers.findAndHookMethod(clz, "setMaxIslandWidth", object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                try { sendWidthExtras(param.thisObject) }
-                catch (_: Exception) {}
+            val clockW = try {
+                XposedHelpers.callMethod(ic, "getClockWidth") as? Int
+            } catch (_: Exception) { null }
+
+            val batteryW = try {
+                XposedHelpers.callMethod(ic, "getBatteryWidth") as? Int
+            } catch (_: Exception) { null }
+
+            val ctx = XposedHelpers.getObjectField(controller, "context")
+                as? android.content.Context
+            val res = ctx?.resources
+            val maxW = res?.displayMetrics?.widthPixels?.toFloat() ?: 0f
+
+            val bundle = Bundle().apply {
+                putString("action_key", "action_island_max_width")
+                putFloat("extra_island_max_width", maxW)
+                putFloat("extra_island_clock_width", (clockW ?: 0).toFloat())
+                putFloat("extra_island_battery_width", (batteryW ?: 0).toFloat())
             }
-        })
-    }
 
-    // ── Signal 3: dropDownExpandedIsland callback ──────────────────────
-
-    private fun hookPluginCallback(classLoader: ClassLoader) {
-        val clz = XposedHelpers.findClass(
-            "com.android.systemui.statusbar.notification.DynamicIslandController", classLoader)
-
-        XposedHelpers.findAndHookMethod(clz, "onDynamicPluginCallback",
-            String::class.java, Bundle::class.java, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (param.args[0] as? String != "dropDownExpandedIsland") return
-                    val bundle = param.args[1] as? Bundle ?: return
-                    val pkg = bundle.getString("miui.pkg.name") ?: return
-
-                    try {
-                        val pc = XposedHelpers.getObjectField(
-                            param.thisObject, "dynamicIslandPluginController")
-                        val content = XposedHelpers.callMethod(pc, "getContent")
-                        val event = Bundle().apply {
-                            putString("action_key", "action_heads_up_height_changed")
-                            putBoolean("is_pull_down_expand", true)
-                            putString("miui.pkg.name", pkg)
-                        }
-                        XposedHelpers.callMethod(content, "handleDynamicIsland", event)
-                    } catch (_: Exception) {}
-
-                    param.result = Bundle().apply { putBoolean("handled", true) }
-                }
-            })
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────
-
-    private fun sendDimenData(controller: Any) {
-        val ctx = XposedHelpers.getObjectField(controller, "context")
-            as? android.content.Context ?: return
-        val pc = XposedHelpers.getObjectField(controller,
-            "dynamicIslandPluginController") ?: return
-        val content = XposedHelpers.callMethod(pc, "getContent") ?: return
-
-        val res = ctx.resources
-        val pw = res.displayMetrics.widthPixels
-        val sp = res.getDimensionPixelSize(
-            res.getIdentifier("notification_side_paddings", "dimen", ctx.packageName))
-        val ew = pw - (2 * sp)
-
-        val bundle = Bundle().apply {
-            putString("action_key", "action_update_island_dimen_data")
-            putInt("expanded_island_width", ew)
-            putInt("heads_up_status_bar_padding", 0)
+            XposedHelpers.callMethod(content, "handleDynamicIsland", bundle)
+            XposedBridge.log("DynamicIslandPort: island width sent (max=$maxW clock=$clockW batt=$batteryW)")
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: width bundle err — ${e.message}")
         }
-        XposedHelpers.callMethod(content, "handleDynamicIsland", bundle)
-        XposedBridge.log("DynamicIslandPort: dimen data sent (w=$ew)")
-    }
-
-    private fun sendWidthExtras(controller: Any) {
-        val pc = XposedHelpers.getObjectField(controller,
-            "dynamicIslandPluginController") ?: return
-        val content = XposedHelpers.callMethod(pc, "getContent") ?: return
-
-        val ic = try {
-            XposedHelpers.getObjectField(controller, "islandControllerImp")
-        } catch (_: Exception) { null }
-
-        val bundle = Bundle().apply {
-            putString("action_key", "action_big_island_width_changed")
-        }
-        if (ic != null) {
-            try { bundle.putInt("extra_island_clock_width",
-                XposedHelpers.callMethod(ic, "getClockWidth") as? Int ?: 0) } catch (_: Exception) {}
-            try { bundle.putInt("extra_island_battery_width",
-                XposedHelpers.callMethod(ic, "getBatteryWidth") as? Int ?: 0) } catch (_: Exception) {}
-        }
-        try { XposedHelpers.callMethod(content, "handleDynamicIsland", bundle) }
-        catch (_: Exception) {}
     }
 }
