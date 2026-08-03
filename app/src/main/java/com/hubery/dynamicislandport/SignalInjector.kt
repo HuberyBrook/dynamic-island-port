@@ -1,41 +1,20 @@
 package com.hubery.dynamicislandport
 
 import android.content.Context
-import android.os.Bundle
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Diagnostic: logs ALL bundles sent from SystemUI to plugin.
- * This reveals exactly what signals the tablet sends vs what's missing.
+ * Forces small island lottie when media content is detected.
+ * The tablet SystemUI doesn't send animation state events,
+ * so we directly trigger the plugin's animation delegate.
  */
 object SignalInjector {
 
     private var pluginCL: ClassLoader? = null
 
     fun hook(cl: ClassLoader) {
-        // Hook SystemUI animation controller to see what events it sends
-        try {
-            val animCtrlClass = XposedHelpers.findClass(
-                "com.android.systemui.statusbar.notification.DynamicIslandWindowAnimController", cl)
-            // Use the Kotlin $default wrapper: (controller, String, boolean, boolean, String, String, Boolean, int)
-            XposedHelpers.findAndHookMethod(animCtrlClass, "sendWindowAnimStatusToPlugin\$default",
-                animCtrlClass, String::class.java,
-                Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
-                String::class.java, String::class.java,
-                Object::class.java, Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        XposedBridge.log("DynamicIslandPort: animEvent=${param.args[1]}")
-                    }
-                })
-            XposedBridge.log("DynamicIslandPort: anim event hook installed")
-        } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: anim hook err — ${e.message}")
-        }
-
-        // Also hook plugin CL
         try {
             val pcClass = XposedHelpers.findClass(
                 "com.android.systemui.statusbar.notification.DynamicIslandPluginController", cl)
@@ -48,44 +27,84 @@ object SignalInjector {
                         if (pluginCL != null) return
                         pluginCL = (param.args[0] as Any).javaClass.classLoader
                         XposedBridge.log("DynamicIslandPort: CL ready")
+                        hookMediaContent()
                     }
                 })
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: CL err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: init err — ${e.message}")
         }
     }
 
-    private fun hookPluginReceiver() {
+    private fun hookMediaContent() {
         val pcl = pluginCL ?: return
         try {
             val vcClass = pcl.loadClass(
                 "miui.systemui.dynamicisland.window.DynamicIslandWindowViewController")
-            XposedHelpers.findAndHookMethod(vcClass, "handleDynamicIsland",
-                Bundle::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val b = param.args[0] as? Bundle ?: return
-                        val action = b.getString("action_key") ?: return
-                        // Log all actions to see what tablet sends
-                        XposedBridge.log("DynamicIslandPort: signal=$action")
-                    }
-                })
-
-            // Also hook addDynamicIslandView to see content
             val dataClass = pcl.loadClass(
                 "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
+
             XposedHelpers.findAndHookMethod(vcClass, "addDynamicIslandView",
                 dataClass, Boolean::class.javaPrimitiveType,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        val key = XposedHelpers.getObjectField(param.args[0], "key") as? String
-                        XposedBridge.log("DynamicIslandPort: addView key=$key")
+                        try {
+                            checkAndAnimate(param.args[0], param.thisObject, pcl)
+                        } catch (_: Exception) {}
                     }
                 })
-
-            XposedBridge.log("DynamicIslandPort: monitoring hooks installed")
+            XposedBridge.log("DynamicIslandPort: media hook installed")
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: hook err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: media err — ${e.message}")
+        }
+    }
+
+    private fun checkAndAnimate(data: Any, vc: Any, pcl: ClassLoader) {
+        val tickerJson = XposedHelpers.getObjectField(data, "tickerData") as? String ?: ""
+        if (tickerJson.isEmpty()) return
+
+        val obj = try { org.json.JSONObject(tickerJson) } catch (_: Exception) { return }
+        val big = obj.optJSONObject("bigIslandArea") ?: return
+        val imgRight = big.optJSONObject("imageTextInfoRight")
+        val imgType = imgRight?.optInt("type", -1) ?: -1
+        if (imgType !in 1..4) return
+
+        // Media content detected! Force small island animation
+        XposedBridge.log("DynamicIslandPort: media detected, triggering anim")
+
+        // Call the plugin's animation controller to trigger small island state
+        try {
+            val animCtrlClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.anim.DynamicIslandAnimationController")
+            val animCtrlField = vc.javaClass.getDeclaredField("animationController")
+            animCtrlField.isAccessible = true
+            val animCtrl = animCtrlField.get(vc) ?: return
+
+            // Try to call the small island animation method
+            // Method signature might vary; try common ones
+            val delegateClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.anim.DynamicIslandAnimationDelegate")
+            val delegateField = animCtrl.javaClass.getDeclaredField("delegate")
+            delegateField.isAccessible = true
+            val delegate = delegateField.get(animCtrl) ?: return
+
+            // Get current content view
+            val currentView = try {
+                XposedHelpers.getObjectField(animCtrl, "currentExpandedView")
+            } catch (_: Exception) {
+                try { XposedHelpers.getObjectField(animCtrl, "currentBigIslandView") }
+                catch (_: Exception) { null }
+            }
+            if (currentView == null) return
+
+            // Call expandedToSmallIslandAnimation (the method exists in v16)
+            val contentViewClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
+            val method = delegateClass.getDeclaredMethod(
+                "expandedToSmallIslandAnimation", contentViewClass)
+            method.invoke(delegate, currentView)
+            XposedBridge.log("DynamicIslandPort: small island anim triggered!")
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: anim err — ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 }
