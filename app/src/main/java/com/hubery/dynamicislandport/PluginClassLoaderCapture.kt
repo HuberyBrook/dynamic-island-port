@@ -11,10 +11,7 @@ import java.lang.reflect.Constructor
 
 /**
  * Injects scene lottie animations into v16 plugin content views.
- *
- * Strategy: get plugin ClassLoader via createPackageContext, then
- * use pure reflection to create and manipulate plugin-side objects
- * (LottieAnimationView, etc.) to avoid ClassLoader type conflicts.
+ * Uses plugin ClassLoader (via createPackageContext) for all plugin-side objects.
  */
 object PluginClassLoaderCapture {
 
@@ -35,7 +32,7 @@ object PluginClassLoaderCapture {
                             Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY)
                         pluginCL = pluginCtx.classLoader
                         XposedBridge.log("DynamicIslandPort: plugin CL obtained")
-                        hookBinder()
+                        hookBind()
                     } catch (e: Exception) {
                         XposedBridge.log("DynamicIslandPort: init err — ${e.message}")
                     }
@@ -45,36 +42,27 @@ object PluginClassLoaderCapture {
 
     // ── Hook: IslandSameWidthDigitViewHolder.bind ──────────────────────
 
-    private fun hookBinder() {
+    private fun hookBind() {
         try {
             val holderClass = pluginCL.loadClass(
                 "miui.systemui.dynamicisland.module.IslandSameWidthDigitViewHolder")
+            val templateClass = pluginCL.loadClass(
+                "miui.systemui.dynamicisland.model.IslandTemplate")
+            val dataClass = Class.forName(
+                "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
 
-            // Find bind method with SameWidthDigitInfo param
-            val infoClass = pluginCL.loadClass(
-                "miui.systemui.dynamicisland.model.SameWidthDigitInfo")
-
-            for (m in holderClass.declaredMethods) {
-                if (m.name != "bind") continue
-                val pts = m.parameterTypes
-                if (pts.size >= 1 && pts[0] == infoClass) {
-                    // Hook using Object varargs to avoid type mismatch
-                    XposedHelpers.findAndHookMethod(holderClass, "bind",
-                        *pts,  // original param types
-                        object : XC_MethodHook() {
-                            override fun afterHookedMethod(param: MethodHookParam) {
-                                try { injectHourglass(param.args[0], param.thisObject) }
-                                catch (e: Exception) {
-                                    XposedBridge.log(
-                                        "DynamicIslandPort: hourglass err — ${e.message}")
-                                }
-                            }
-                        })
-                    XposedBridge.log("DynamicIslandPort: timer binder hooked")
-                    return
-                }
-            }
-            XposedBridge.log("DynamicIslandPort: bind(info) not found")
+            XposedHelpers.findAndHookMethod(holderClass, "bind",
+                templateClass, dataClass,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            injectHourglass(param.args[0], param.thisObject)
+                        } catch (e: Exception) {
+                            XposedBridge.log("DynamicIslandPort: hourglass err — ${e.message}")
+                        }
+                    }
+                })
+            XposedBridge.log("DynamicIslandPort: timer binder hooked")
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: binder err — ${e.message}")
         }
@@ -82,49 +70,44 @@ object PluginClassLoaderCapture {
 
     // ── Hourglass injection ────────────────────────────────────────────
 
-    private fun injectHourglass(info: Any, holder: Any) {
-        // Check timerInfo presence
-        val timerInfo = XposedHelpers.getObjectField(info, "timerInfo") ?: return
-        val timerType = (XposedHelpers.getObjectField(timerInfo, "timerType") as? Int) ?: 0
+    private fun injectHourglass(template: Any, holder: Any) {
+        // Navigate: template.bigIslandArea.sameWidthDigitInfo.timerInfo
+        val bigArea = XposedHelpers.getObjectField(template, "bigIslandArea") ?: return
+        val swInfo = XposedHelpers.getObjectField(bigArea, "sameWidthDigitInfo") ?: return
+        val timerInfo = XposedHelpers.getObjectField(swInfo, "timerInfo") ?: return
 
-        // Get itemView root
+        val timerType = XposedHelpers.getObjectField(timerInfo, "timerType") as? Int ?: 0
+        // timerType < 0 = countdown timer, use hourglass; >= 0 = stopwatch, use hourglass_big
+
         val itemView = try {
             XposedHelpers.callMethod(holder, "getItemView") as? View
         } catch (_: Exception) {
             XposedHelpers.getObjectField(holder, "itemView") as? View
         } ?: return
 
-        // Already injected?
         if (itemView.findViewWithTag<View>("lottie_hg") != null) return
 
-        // Load lottie resource ID from plugin
-        val resName = if (timerType < 0) "hourglass" else "hourglass_big"
+        val resName = "hourglass" // use the same for now
         val resId = pluginCtx.resources.getIdentifier(resName, "raw", PLUGIN_PKG)
-        if (resId == 0) {
-            XposedBridge.log("DynamicIslandPort: res $resName not found")
-            return
-        }
+        if (resId == 0) return
 
-        // Create LottieAnimationView via reflection (plugin ClassLoader)
         val lottieView = createLottieView(resId) ?: return
         lottieView.tag = "lottie_hg"
 
-        // Add to parent layout
         val parent = itemView.parent as? ViewGroup ?: return
         if (parent is FrameLayout) {
             val size = (itemView.height * 1.3f).toInt().coerceAtLeast(44)
             val lp = FrameLayout.LayoutParams(size, size)
             lp.gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
-            lp.marginEnd = 4.dpToPx()
+            lp.marginEnd = (4 * pluginCtx.resources.displayMetrics.density + 0.5f).toInt()
             parent.addView(lottieView, lp)
 
-            // Play
             XposedHelpers.callMethod(lottieView, "playAnimation")
-            XposedBridge.log("DynamicIslandPort: hourglass added ($resName type=$timerType)")
+            XposedBridge.log("DynamicIslandPort: hourglass added (type=$timerType)")
         }
     }
 
-    // ── Reflection helpers for plugin-side objects ─────────────────────
+    // ── Reflection helpers ─────────────────────────────────────────────
 
     private fun createLottieView(resId: Int): View? {
         return try {
@@ -132,25 +115,20 @@ object PluginClassLoaderCapture {
             val ctor: Constructor<*> = lavClass.getConstructor(Context::class.java)
             val view = ctor.newInstance(pluginCtx) as View
 
-            // setAnimation(resId)
             XposedHelpers.callMethod(view, "setAnimation", resId)
-            // setRepeatCount(INFINITE)
+
             val infField = pluginCL.loadClass("com.airbnb.lottie.LottieDrawable")
                 .getField("INFINITE")
-            val infinite = infField.getInt(null)
-            XposedHelpers.callMethod(view, "setRepeatCount", infinite)
-            // setRepeatMode(RESTART)
+            XposedHelpers.callMethod(view, "setRepeatCount", infField.getInt(null))
+
             val restartField = pluginCL.loadClass("com.airbnb.lottie.LottieDrawable")
                 .getField("RESTART")
             XposedHelpers.callMethod(view, "setRepeatMode", restartField.getInt(null))
 
             view
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: createLottie err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: lottie create err — ${e.message}")
             null
         }
     }
-
-    private fun Int.dpToPx(): Int =
-        (this * pluginCtx.resources.displayMetrics.density + 0.5f).toInt()
 }
