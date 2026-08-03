@@ -77,24 +77,29 @@ object SignalInjector {
                 if (list.isEmpty()) return@postDelayed
                 val cv = list[0] ?: return@postDelayed
 
-                val f = cv.javaClass.superclass?.getDeclaredField("animatorDelegate")
-                    ?: cv.javaClass.getDeclaredField("animatorDelegate")
-                f.isAccessible = true
-                val delegate = f.get(cv) ?: run {
-                    XposedBridge.log("DynamicIslandPort: delegate still null")
-                    return@postDelayed
-                }
-                val cvClass = pcl.loadClass(
-                    "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
-                delegate.javaClass
-                    .getDeclaredMethod("expandedToSmallIslandAnimation", cvClass)
-                    .invoke(delegate, cv)
-                XposedBridge.log("DynamicIslandPort: anim done!")
+                // Find and play lottie views directly
+                playLottieViews(cv as? android.view.View)
+                XposedBridge.log("DynamicIslandPort: lottie check done")
             } catch (e: Exception) {
-                XposedBridge.log("DynamicIslandPort: anim err — ${e.message}")
+                XposedBridge.log("DynamicIslandPort: err — ${e.message}")
             }
         }, 500)
         XposedBridge.log("DynamicIslandPort: delayed check scheduled")
+    }
+
+    private fun playLottieViews(view: android.view.View?) {
+        if (view == null) return
+        val name = view.javaClass.name
+        if (name.contains("Lottie")) {
+            try { XposedHelpers.callMethod(view, "playAnimation")
+                XposedBridge.log("DynamicIslandPort: lottie play: $name")
+            } catch (_: Exception) {}
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                playLottieViews(view.getChildAt(i))
+            }
+        }
     }
 
     private fun findWindowView(pcl: ClassLoader): Any? {
