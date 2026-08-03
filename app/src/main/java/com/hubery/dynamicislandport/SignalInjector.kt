@@ -19,17 +19,22 @@ object SignalInjector {
             val binderClass = XposedHelpers.findClass(
                 "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewBinder", cl)
 
-            // bindMediaData(MediaData, ViewHolder, ViewHolder)
+            // bindMediaData(MediaData) — tablet only has 1 param
             XposedHelpers.findAndHookMethod(binderClass, "bindMediaData",
                 XposedHelpers.findClass(
                     "com.android.systemui.media.controls.shared.model.MediaData", cl),
-                holderClass, holderClass,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        try { activateMusicBg(param.args[1]) }
-                        catch (_: Exception) {}
-                        try { activateMusicBg(param.args[2]) }
-                        catch (_: Exception) {}
+                        // Search view tree for MusicBgView and activate it
+                        try {
+                            val wmg = Class.forName("android.view.WindowManagerGlobal")
+                            val inst = wmg.getDeclaredMethod("getInstance").invoke(null)
+                            val f = wmg.getDeclaredField("mViews"); f.isAccessible = true
+                            @Suppress("UNCHECKED_CAST")
+                            for (root in f.get(inst) as? List<android.view.View> ?: emptyList()) {
+                                findAndActivateMusicBg(root)
+                            }
+                        } catch (_: Exception) {}
                     }
                 })
             XposedBridge.log("DynamicIslandPort: media bind hooked")
@@ -38,14 +43,20 @@ object SignalInjector {
         }
     }
 
-    private fun activateMusicBg(holder: Any) {
-        val bg = XposedHelpers.getObjectField(holder, "mediaBgView") ?: return
-        try {
-            val running = XposedHelpers.callMethod(bg, "isRunning") as? Boolean
-            if (running != true) {
-                XposedHelpers.callMethod(bg, "start")
-                XposedBridge.log("DynamicIslandPort: MusicBgView started")
+    private fun findAndActivateMusicBg(view: android.view.View) {
+        if (view.javaClass.name.contains("MusicBgView")) {
+            try {
+                val running = XposedHelpers.callMethod(view, "isRunning") as? Boolean
+                if (running != true) {
+                    XposedHelpers.callMethod(view, "start")
+                    XposedBridge.log("DynamicIslandPort: MusicBgView started")
+                }
+            } catch (_: Exception) {}
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                findAndActivateMusicBg(view.getChildAt(i))
             }
-        } catch (_: Exception) {}
+        }
     }
 }
