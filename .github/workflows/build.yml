@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, plugin-mod]
   workflow_dispatch:
 
 jobs:
