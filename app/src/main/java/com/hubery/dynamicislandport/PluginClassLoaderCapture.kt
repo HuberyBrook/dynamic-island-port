@@ -32,7 +32,8 @@ object PluginClassLoaderCapture {
                         if (pluginCL != null) return
                         val plugin = param.args[0]
                         pluginCL = plugin.javaClass.classLoader
-                        pluginCtx = XposedHelpers.getObjectField(param.thisObject, "context") as? Context
+                        val sysCtx = XposedHelpers.getObjectField(param.thisObject, "context") as? Context
+                        pluginCtx = sysCtx?.createPackageContext(PLUGIN_PKG, 0)
                         XposedBridge.log("DynamicIslandPort: plugin CL captured")
                         hookAddView(sysUiCL)
                     }
