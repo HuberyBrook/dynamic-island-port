@@ -73,7 +73,15 @@ object PluginClassLoaderCapture {
     private fun onContentAdded(data: Any, ctx: Context, pcl: ClassLoader, sysUiCL: ClassLoader) {
         val key = XposedHelpers.getObjectField(data, "key") as? String ?: ""
         val json = XposedHelpers.getObjectField(data, "tickerData") as? String ?: ""
-        if (json.isEmpty()) return
+        XposedBridge.log("DynamicIslandPort: content key=$key jsonLen=${json.length}")
+        if (json.isEmpty()) {
+            // Music may use view directly instead of tickerData
+            val view = XposedHelpers.getObjectField(data, "view")
+            if (view != null) {
+                XposedBridge.log("DynamicIslandPort: direct view content: ${view.javaClass.name}")
+            }
+            return
+        }
 
         val obj = try { org.json.JSONObject(json) } catch (_: Exception) { return }
         val big = obj.optJSONObject("bigIslandArea") ?: return
