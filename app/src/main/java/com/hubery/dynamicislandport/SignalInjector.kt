@@ -15,6 +15,27 @@ object SignalInjector {
     private var pluginCL: ClassLoader? = null
 
     fun hook(cl: ClassLoader) {
+        // Hook SystemUI animation controller to see what events it sends
+        try {
+            val animCtrlClass = XposedHelpers.findClass(
+                "com.android.systemui.statusbar.notification.DynamicIslandWindowAnimController", cl)
+            // Use the Kotlin $default wrapper: (controller, String, boolean, boolean, String, String, Boolean, int)
+            XposedHelpers.findAndHookMethod(animCtrlClass, "sendWindowAnimStatusToPlugin\$default",
+                animCtrlClass, String::class.java,
+                Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
+                String::class.java, String::class.java,
+                Object::class.java, Int::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        XposedBridge.log("DynamicIslandPort: animEvent=${param.args[1]}")
+                    }
+                })
+            XposedBridge.log("DynamicIslandPort: anim event hook installed")
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: anim hook err — ${e.message}")
+        }
+
+        // Also hook plugin CL
         try {
             val pcClass = XposedHelpers.findClass(
                 "com.android.systemui.statusbar.notification.DynamicIslandPluginController", cl)
@@ -27,11 +48,10 @@ object SignalInjector {
                         if (pluginCL != null) return
                         pluginCL = (param.args[0] as Any).javaClass.classLoader
                         XposedBridge.log("DynamicIslandPort: CL ready")
-                        hookPluginReceiver()
                     }
                 })
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: init err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: CL err — ${e.message}")
         }
     }
 
