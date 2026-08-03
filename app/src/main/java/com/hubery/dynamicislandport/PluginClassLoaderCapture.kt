@@ -50,7 +50,8 @@ object PluginClassLoaderCapture {
                 "miui.systemui.dynamicisland.module.IslandSameWidthDigitViewHolder")
             val templateClass = pluginCL.loadClass(
                 "miui.systemui.dynamicisland.model.IslandTemplate")
-            val dataClass = sysUiCL.loadClass(
+            // DynamicIslandData is in SystemUI's CL, but pluginCL can see it via parent
+            val dataClass = pluginCL.loadClass(
                 "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
 
             XposedHelpers.findAndHookMethod(holderClass, "bind",
@@ -66,7 +67,7 @@ object PluginClassLoaderCapture {
                 })
             XposedBridge.log("DynamicIslandPort: timer binder hooked")
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: binder err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: binder err — ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
