@@ -6,57 +6,83 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Activates MusicBgView in tablet's media island binder.
- * Phone binder calls MusicBgView.start/resume/pause;
- * tablet binder has the view but never activates it.
+ * Fixes v17 plugin position + touch region on A15 tablet.
+ * Hooks DynamicIslandSizeRepository.updateIslandMaxWidth
+ * to inject correct clock/battery widths from SystemUI.
  */
 object SignalInjector {
 
     fun hook(cl: ClassLoader) {
         try {
-            val holderClass = XposedHelpers.findClass(
-                "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewHolder", cl)
-            val binderClass = XposedHelpers.findClass(
-                "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewBinder", cl)
-
-            // bindMediaData(MediaData) — tablet only has 1 param
-            XposedHelpers.findAndHookMethod(binderClass, "bindMediaData",
-                XposedHelpers.findClass(
-                    "com.android.systemui.media.controls.shared.model.MediaData", cl),
+            val pcClass = XposedHelpers.findClass(
+                "com.android.systemui.statusbar.notification.DynamicIslandPluginController", cl)
+            XposedHelpers.findAndHookMethod(pcClass, "onPluginLoaded",
+                XposedHelpers.findClass("com.android.systemui.plugins.Plugin", cl),
+                Context::class.java,
+                XposedHelpers.findClass("com.android.systemui.plugins.PluginLifecycleManager", cl),
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        // Search view tree for MusicBgView and activate it
-                        try {
-                            val wmg = Class.forName("android.view.WindowManagerGlobal")
-                            val inst = wmg.getDeclaredMethod("getInstance").invoke(null)
-                            val f = wmg.getDeclaredField("mViews"); f.isAccessible = true
-                            @Suppress("UNCHECKED_CAST")
-                            for (root in f.get(inst) as? List<android.view.View> ?: emptyList()) {
-                                findAndActivateMusicBg(root)
-                            }
-                        } catch (_: Exception) {}
+                        val pcl = (param.args[0] as Any).javaClass.classLoader
+                        XposedBridge.log("DynamicIslandPort: plugin CL ready")
+                        hookSizeRepo(pcl, param.thisObject)
                     }
                 })
-            XposedBridge.log("DynamicIslandPort: media bind hooked")
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: err — ${e.message}")
         }
     }
 
-    private fun findAndActivateMusicBg(view: android.view.View) {
-        if (view.javaClass.name.contains("MusicBgView")) {
-            try {
-                val running = XposedHelpers.callMethod(view, "isRunning") as? Boolean
-                if (running != true) {
-                    XposedHelpers.callMethod(view, "start")
-                    XposedBridge.log("DynamicIslandPort: MusicBgView started")
-                }
-            } catch (_: Exception) {}
+    private fun hookSizeRepo(pcl: ClassLoader, pc: Any) {
+        try {
+            val repoClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.data.repository.DynamicIslandSizeRepository")
+
+            // updateIslandMaxWidth(float maxW, float clockW, float batteryW)
+            XposedHelpers.findAndHookMethod(repoClass, "updateIslandMaxWidth",
+                Float::class.javaPrimitiveType,
+                Float::class.javaPrimitiveType,
+                Float::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val clockW = param.args[1] as Float
+                        val batteryW = param.args[2] as Float
+                        if (clockW > 0f && batteryW > 0f) return // already correct
+
+                        // Get real widths from SystemUI
+                        val sysCtx = XposedHelpers.getObjectField(pc, "context") as? Context ?: return
+                        val ctrl = findIslandController(sysCtx) ?: return
+                        val realClock = try {
+                            (XposedHelpers.callMethod(ctrl, "getClockWidth") as? Int)?.toFloat() ?: 0f
+                        } catch (_: Exception) { 0f }
+                        val realBattery = try {
+                            (XposedHelpers.callMethod(ctrl, "getBatteryWidth") as? Int)?.toFloat() ?: 0f
+                        } catch (_: Exception) { 0f }
+
+                        if (realClock > 0f) param.args[1] = realClock
+                        if (realBattery > 0f) param.args[2] = realBattery
+                        XposedBridge.log("DynamicIslandPort: width fix cw=$realClock bw=$realBattery")
+                    }
+                })
+            XposedBridge.log("DynamicIslandPort: sizeRepo hooked")
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: repo err — ${e.message}")
         }
-        if (view is android.view.ViewGroup) {
-            for (i in 0 until view.childCount) {
-                findAndActivateMusicBg(view.getChildAt(i))
-            }
+    }
+
+    private fun findIslandController(ctx: Context): Any? {
+        return try {
+            val app = ctx.applicationContext
+            val component = XposedHelpers.callMethod(app, "getSystemUIComponent")
+            XposedHelpers.callMethod(component, "getStatusBarIslandController")
+        } catch (_: Exception) {
+            // Fallback: search via Dagger
+            try {
+                val app = ctx.applicationContext
+                val dcl = Class.forName(
+                    "com.android.systemui.dagger.DaggerReferenceGlobalRootComponent\$ReferenceSysUIComponentImpl")
+                // Too complex, just return null
+                null
+            } catch (_: Exception) { null }
         }
     }
 }
