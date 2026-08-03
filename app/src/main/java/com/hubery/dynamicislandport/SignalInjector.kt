@@ -68,38 +68,28 @@ object SignalInjector {
         val imgType = imgRight?.optInt("type", -1) ?: -1
         if (imgType !in 1..4) return
 
-        // Media content detected! Force small island animation
         XposedBridge.log("DynamicIslandPort: media detected, triggering anim")
 
-        // Call the plugin's animation controller to trigger small island state
         try {
-            val animCtrlClass = pcl.loadClass(
-                "miui.systemui.dynamicisland.anim.DynamicIslandAnimationController")
-            val animCtrlField = vc.javaClass.getDeclaredField("animationController")
-            animCtrlField.isAccessible = true
-            val animCtrl = animCtrlField.get(vc) ?: return
+            // Get window view from VC
+            val windowView = XposedHelpers.getObjectField(vc, "windowView")
+                ?: XposedHelpers.callMethod(vc, "getWindowView")
+                ?: return
 
-            // Try to call the small island animation method
-            // Method signature might vary; try common ones
-            val delegateClass = pcl.loadClass(
-                "miui.systemui.dynamicisland.anim.DynamicIslandAnimationDelegate")
-            val delegateField = animCtrl.javaClass.getDeclaredField("delegate")
-            delegateField.isAccessible = true
-            val delegate = delegateField.get(animCtrl) ?: return
+            // Get content view via the animation controller
+            val animCtrl = XposedHelpers.getObjectField(windowView, "animationController")
+                ?: return
+            val currentView = XposedHelpers.getObjectField(animCtrl, "currentExpandedView")
+                ?: XposedHelpers.getObjectField(animCtrl, "currentBigIslandView")
+                ?: return
 
-            // Get current content view
-            val currentView = try {
-                XposedHelpers.getObjectField(animCtrl, "currentExpandedView")
-            } catch (_: Exception) {
-                try { XposedHelpers.getObjectField(animCtrl, "currentBigIslandView") }
-                catch (_: Exception) { null }
-            }
-            if (currentView == null) return
+            // Get delegate from content view
+            val delegate = XposedHelpers.callMethod(currentView, "getAnimatorDelegate") ?: return
 
-            // Call expandedToSmallIslandAnimation (the method exists in v16)
+            // Call the small island animation
             val contentViewClass = pcl.loadClass(
                 "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
-            val method = delegateClass.getDeclaredMethod(
+            val method = delegate.javaClass.getDeclaredMethod(
                 "expandedToSmallIslandAnimation", contentViewClass)
             method.invoke(delegate, currentView)
             XposedBridge.log("DynamicIslandPort: small island anim triggered!")
