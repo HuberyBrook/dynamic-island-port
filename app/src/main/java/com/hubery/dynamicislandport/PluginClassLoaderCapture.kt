@@ -50,8 +50,8 @@ object PluginClassLoaderCapture {
                 "miui.systemui.dynamicisland.module.IslandSameWidthDigitViewHolder")
             val templateClass = pluginCL.loadClass(
                 "miui.systemui.dynamicisland.model.IslandTemplate")
-            // DynamicIslandData is in SystemUI's CL, but pluginCL can see it via parent
-            val dataClass = pluginCL.loadClass(
+            // DynamicIslandData is in SystemUI — must use sysUiCL
+            val dataClass = sysUiCL.loadClass(
                 "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
 
             XposedHelpers.findAndHookMethod(holderClass, "bind",
