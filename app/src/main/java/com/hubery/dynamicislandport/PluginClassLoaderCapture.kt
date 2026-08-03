@@ -85,7 +85,7 @@ object PluginClassLoaderCapture {
     private fun injectHourglass(info: Any, holder: Any) {
         // Check timerInfo presence
         val timerInfo = XposedHelpers.getObjectField(info, "timerInfo") ?: return
-        val timerType = XposedHelpers.getIntField(timerInfo, "timerType")
+        val timerType = (XposedHelpers.getObjectField(timerInfo, "timerType") as? Int) ?: 0
 
         // Get itemView root
         val itemView = try {
