@@ -54,15 +54,7 @@ object SignalInjector {
                     }
                 })
 
-            // Proactively send width now
-            if (clockWidth > 0f) {
-                sendNow(pcl, vcClass)
-            } else {
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    measureWidthsFromStatusBar()
-                    if (clockWidth > 0f) sendNow(pcl, vcClass)
-                }, 3000)
-            }
+            // Don't send proactively — just intercept existing bundles
             XposedBridge.log("DynamicIslandPort: ready cw=$clockWidth bw=$batteryWidth")
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: hook err — ${e.message}")
