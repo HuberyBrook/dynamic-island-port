@@ -45,12 +45,12 @@ object SignalInjector {
         try {
             val binderClass = XposedHelpers.findClass(
                 "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewBinder", cl)
+            val holderClass = XposedHelpers.findClass(
+                "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewHolder", cl)
 
-            // Hook attach — called when media island view is attached
+            // Tablet signature: attach(MiuiIslandMediaViewHolder, MiuiIslandMediaViewHolder)
             XposedHelpers.findAndHookMethod(binderClass, "attach",
-                Object::class.java,  // ViewHolder
-                Object::class.java,  // ViewHolder (2nd)
-                Object::class.java,  // MediaData
+                holderClass, holderClass,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try { activateMusicBg(param.args[0]) }
