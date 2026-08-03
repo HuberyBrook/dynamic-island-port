@@ -119,12 +119,16 @@ object PluginClassLoaderCapture {
             return
         }
 
+        XposedBridge.log("DynamicIslandPort: scenes=$resNames")
         android.os.Handler(ctx.mainLooper).post {
             for (name in resNames) {
                 val resId = ctx.resources.getIdentifier(name, "raw", PLUGIN_PKG)
+                XposedBridge.log("DynamicIslandPort: res $name -> $resId")
                 if (resId == 0) continue
                 try { injectLottie(resId, ctx, pcl, key + "_" + name) }
-                catch (_: Exception) {}
+                catch (e: Exception) {
+                    XposedBridge.log("DynamicIslandPort: inject fail — ${e.message}")
+                }
             }
         }
     }
@@ -132,10 +136,14 @@ object PluginClassLoaderCapture {
     // ── View injection ─────────────────────────────────────────────────
 
     private fun injectLottie(resId: Int, ctx: Context, cl: ClassLoader, tag: String) {
-        val islandView = findIslandView() ?: return
+        val islandView = findIslandView()
+        XposedBridge.log("DynamicIslandPort: islandView=${islandView != null} tag=$tag")
+        if (islandView == null) return
         if (islandView.findViewWithTag<View>(tag) != null) return
 
-        val lottie = createLottieView(resId, ctx, cl) ?: return
+        val lottie = createLottieView(resId, ctx, cl)
+        XposedBridge.log("DynamicIslandPort: lottie created=${lottie != null}")
+        if (lottie == null) return
         lottie.tag = tag
 
         if (islandView is FrameLayout) {
