@@ -1,42 +1,41 @@
 package com.hubery.dynamicislandport
 
 import android.view.View
+import dalvik.system.PathClassLoader
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Fixes v17 plugin position offset on A15 tablet.
- * Hooks the plugin's DynamicIslandWindowView.setTranslationX
- * to prevent the island from sticking to the far left.
+ * Fixes v17 plugin position offset by hooking the plugin's own classes.
+ * Plugin classes are in a separate ClassLoader — we use PathClassLoader
+ * to load them from the APK path.
  */
 object WidthInjector {
 
-    private var fixed = false
+    private const val PLUGIN_PATH = "/product/app/MIUISystemUIPlugin/MIUISystemUIPlugin.apk"
+    private const val WINDOW_VIEW = "miui.systemui.dynamicisland.window.DynamicIslandWindowView"
 
-    fun hook(classLoader: ClassLoader) {
+    fun hook(sysuiClassLoader: ClassLoader) {
         try {
-            val windowViewClass = XposedHelpers.findClass(
-                "miui.systemui.dynamicisland.window.DynamicIslandWindowView", classLoader)
+            val pluginCL = PathClassLoader(PLUGIN_PATH, sysuiClassLoader)
+            val windowViewClass = Class.forName(WINDOW_VIEW, false, pluginCL)
 
             XposedHelpers.findAndHookMethod(windowViewClass, "setTranslationX",
                 Float::class.javaPrimitiveType,
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (fixed) return
                         val view = param.thisObject as View
-                        val dw = view.context.resources.displayMetrics.widthPixels.toFloat()
-                        val iw = view.width.toFloat()
-                        if (iw > 0 && dw > 0) {
-                            val cx = (dw - iw) / 2f
+                        val tx = param.args[0] as Float
+                        if (tx < 100f && view.width > 0) {
+                            val dw = view.context.resources.displayMetrics.widthPixels.toFloat()
+                            val cx = (dw - view.width) / 2f
                             param.args[0] = cx
-                            fixed = true
-                            XposedBridge.log("DynamicIslandPort: pos override $cx")
                         }
                     }
                 })
 
-            XposedBridge.log("DynamicIslandPort: position hook installed")
+            XposedBridge.log("DynamicIslandPort: position hook installed via PathClassLoader")
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: WidthInjector err — ${e.message}")
         }
