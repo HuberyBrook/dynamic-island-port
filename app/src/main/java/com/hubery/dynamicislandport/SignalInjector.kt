@@ -22,7 +22,7 @@ object SignalInjector {
             // bindMediaData(MediaData, ViewHolder, ViewHolder)
             XposedHelpers.findAndHookMethod(binderClass, "bindMediaData",
                 XposedHelpers.findClass(
-                    "com.android.systemui.statusbar.notification.mediaisland.MediaData", cl),
+                    "com.android.systemui.media.controls.shared.model.MediaData", cl),
                 holderClass, holderClass,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
