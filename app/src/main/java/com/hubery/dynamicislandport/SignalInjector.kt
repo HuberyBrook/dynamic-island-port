@@ -1,23 +1,21 @@
 package com.hubery.dynamicislandport
 
 import android.content.Context
-import android.view.View
-import android.view.ViewGroup
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Activates MusicBgView animation in tablet's media island.
- * Phone SystemUI binder calls MusicBgView.start/resume/pause;
- * tablet binder doesn't — the view is in the layout but never activated.
+ * Force-enables small island lottie animation on tablet.
+ * The plugin's animation delegate has the rendering code but
+ * the tablet SystemUI doesn't trigger it. We hook the delegate
+ * directly to enable the animation when island enters small state.
  */
 object SignalInjector {
 
     private var pluginCL: ClassLoader? = null
 
     fun hook(cl: ClassLoader) {
-        // Get plugin CL via onPluginLoaded
         try {
             val pcClass = XposedHelpers.findClass(
                 "com.android.systemui.statusbar.notification.DynamicIslandPluginController", cl)
@@ -30,68 +28,40 @@ object SignalInjector {
                         if (pluginCL != null) return
                         pluginCL = (param.args[0] as Any).javaClass.classLoader
                         XposedBridge.log("DynamicIslandPort: CL ready")
-                        hookMediaBinder(cl)
+                        hookAnimDelegate()
                     }
                 })
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: CL err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: init err — ${e.message}")
         }
     }
 
-    /**
-     * Hook tablet's MiuiIslandMediaViewBinder.attach to activate MusicBgView.
-     */
-    private fun hookMediaBinder(cl: ClassLoader) {
+    private fun hookAnimDelegate() {
+        val pcl = pluginCL ?: return
         try {
-            val binderClass = XposedHelpers.findClass(
-                "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewBinder", cl)
-            val holderClass = XposedHelpers.findClass(
-                "com.android.systemui.statusbar.notification.mediaisland.MiuiIslandMediaViewHolder", cl)
+            val delegateClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.anim.DynamicIslandAnimationDelegate")
 
-            // Tablet signature: attach(MiuiIslandMediaViewHolder, MiuiIslandMediaViewHolder)
-            XposedHelpers.findAndHookMethod(binderClass, "attach",
-                holderClass, holderClass,
+            // Hook hiddenToSmallIslandAnimation — called when island transitions to small pill
+            XposedHelpers.findAndHookMethod(delegateClass, "hiddenToSmallIslandAnimation",
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        try { activateMusicBg(param.args[0]) }
-                        catch (_: Exception) {}
+                        XposedBridge.log("DynamicIslandPort: small island anim triggered")
                     }
                 })
 
-            XposedBridge.log("DynamicIslandPort: media binder hooked")
+            // Hook expandedToSmallIslandAnimation
+            XposedHelpers.findAndHookMethod(delegateClass, "expandedToSmallIslandAnimation",
+                Boolean::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        XposedBridge.log("DynamicIslandPort: expand→small anim triggered")
+                    }
+                })
+
+            XposedBridge.log("DynamicIslandPort: anim delegate hooked")
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: binder err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: delegate err — ${e.message}")
         }
-    }
-
-    private fun activateMusicBg(holder: Any) {
-        // Get itemView from ViewHolder
-        val itemView = try {
-            XposedHelpers.callMethod(holder, "getItemView") as? View
-        } catch (_: Exception) {
-            XposedHelpers.getObjectField(holder, "itemView") as? View
-        } ?: return
-
-        // Find MusicBgView in the view tree
-        val musicBg = findMusicBgView(itemView) ?: return
-
-        // Call start() if it hasn't been started yet
-        try {
-            val isRunning = XposedHelpers.callMethod(musicBg, "isRunning") as? Boolean
-            if (isRunning != true) {
-                XposedHelpers.callMethod(musicBg, "start")
-                XposedBridge.log("DynamicIslandPort: MusicBgView activated")
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun findMusicBgView(root: View): View? {
-        if (root.javaClass.name.contains("MusicBgView")) return root
-        if (root is ViewGroup) {
-            for (i in 0 until root.childCount) {
-                findMusicBgView(root.getChildAt(i))?.let { return it }
-            }
-        }
-        return null
     }
 }
