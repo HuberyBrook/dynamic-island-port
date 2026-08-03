@@ -108,11 +108,8 @@ object PluginClassLoaderCapture {
             if (timerType != Integer.MAX_VALUE) resNames.add("hourglass")
         }
         if (imgType in 1..4 || smallImgType in 1..4) {
-            // Media scene (music/video) — use voice_wave for audio,
-            // charger_light_wave for general media ripple
             val business = obj.optString("business", "")
-            val isVideo = business.contains("video", ignoreCase = true)
-            resNames.add(if (isVideo) "charger_light_wave" else "voice_wave_big")
+            resNames.add(if (business.contains("video", ignoreCase = true)) "charger_light_wave" else "voice_wave_big")
         }
 
         if (resNames.isEmpty()) {
@@ -171,7 +168,8 @@ object PluginClassLoaderCapture {
     }
 
     private fun findRecursive(v: View): View? {
-        if (v.javaClass.name.contains("DynamicIslandWindowView")) return v
+        // Find the inner content view, not the outer window frame
+        if (v.javaClass.name.contains("DynamicIslandBigIslandView")) return v
         if (v is ViewGroup)
             for (i in 0 until v.childCount)
                 findRecursive(v.getChildAt(i))?.let { return it }
