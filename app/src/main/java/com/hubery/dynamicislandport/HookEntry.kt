@@ -6,12 +6,15 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 class HookEntry : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        if (lpparam.packageName != "com.android.systemui") return
-        try {
-            SignalInjector.hook(lpparam.classLoader)
-            XposedBridge.log("DynamicIslandPort: hooks installed")
-        } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: err — ${e.message}")
+        when (lpparam.packageName) {
+            "com.android.systemui" -> {
+                XposedBridge.log("DynamicIslandPort: SystemUI loaded")
+                SignalInjector.hookSystemUI(lpparam.classLoader)
+            }
+            "miui.systemui.plugin" -> {
+                XposedBridge.log("DynamicIslandPort: Plugin loaded, CL=${lpparam.classLoader}")
+                SignalInjector.hookPlugin(lpparam.classLoader)
+            }
         }
     }
 }
