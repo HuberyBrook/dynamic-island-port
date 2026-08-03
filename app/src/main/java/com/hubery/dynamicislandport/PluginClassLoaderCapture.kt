@@ -111,8 +111,11 @@ object PluginClassLoaderCapture {
         val roots = arrayListOf<View>()
         try {
             val wmGlobalClass = Class.forName("android.view.WindowManagerGlobal")
-            val instance = XposedHelpers.callStaticMethod(wmGlobalClass, "getInstance")
-            val views = XposedHelpers.getObjectField(instance, "mViews") as? List<*>
+            val getInstance = wmGlobalClass.getDeclaredMethod("getInstance")
+            val instance = getInstance.invoke(null)
+            val viewsField = wmGlobalClass.getDeclaredField("mViews")
+            viewsField.isAccessible = true
+            val views = viewsField.get(instance) as? List<*>
             views?.forEach { v -> (v as? View)?.let { roots.add(it) } }
         } catch (_: Exception) {}
 
