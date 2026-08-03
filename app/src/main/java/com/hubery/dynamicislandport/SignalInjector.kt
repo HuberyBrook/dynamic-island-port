@@ -41,21 +41,22 @@ object SignalInjector {
         try {
             val delegateClass = pcl.loadClass(
                 "miui.systemui.dynamicisland.anim.DynamicIslandAnimationDelegate")
+            val contentViewClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
 
-            // Hook hiddenToSmallIslandAnimation — called when island transitions to small pill
             XposedHelpers.findAndHookMethod(delegateClass, "hiddenToSmallIslandAnimation",
+                contentViewClass,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        XposedBridge.log("DynamicIslandPort: small island anim triggered")
+                        XposedBridge.log("DynamicIslandPort: hidden→small anim")
                     }
                 })
 
-            // Hook expandedToSmallIslandAnimation
             XposedHelpers.findAndHookMethod(delegateClass, "expandedToSmallIslandAnimation",
-                Boolean::class.javaPrimitiveType,
+                contentViewClass,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        XposedBridge.log("DynamicIslandPort: expand→small anim triggered")
+                        XposedBridge.log("DynamicIslandPort: expanded→small anim")
                     }
                 })
 
