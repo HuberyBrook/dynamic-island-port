@@ -16,10 +16,8 @@ class HookEntry : IXposedHookLoadPackage {
         XposedBridge.log("DynamicIslandPort: hooking SystemUI...")
 
         try {
-            // v17 plugin provides Pad animations natively.
-            // IslandStretchEnhancer disabled — conflicts with Pad strategy.
             FeatureFlagEnabler.hook(lpparam.classLoader)
-            DynamicIslandEnhancer.hook(lpparam.classLoader)
+            WidthInjector.hook(lpparam.classLoader)
 
             XposedBridge.log("DynamicIslandPort: hooks applied OK")
         } catch (e: Exception) {
