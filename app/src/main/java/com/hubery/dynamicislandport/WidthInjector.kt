@@ -1,68 +1,60 @@
 package com.hubery.dynamicislandport
 
-import android.os.Bundle
+import android.view.View
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Fixes v17 plugin position offset by injecting missing width data.
+ * Fixes v17 plugin position offset on A15 tablet.
  *
- * v17 plugin's PadDynamicIslandAnimationDelegateHelper needs
- * extra_island_clock_width and extra_island_battery_width from
- * action_island_max_width bundle. A15 tablet SystemUI doesn't
- * send these — we inject them after setMaxIslandWidth runs.
+ * Instead of trying to inject width data through SystemUI (which crashes
+ * because getContent() is inaccessible), we directly hook the plugin's
+ * DynamicIslandWindowView and correct its x-position after layout.
  */
 object WidthInjector {
 
     fun hook(classLoader: ClassLoader) {
-        val clz = XposedHelpers.findClass(
-            "com.android.systemui.statusbar.notification.DynamicIslandController",
-            classLoader)
+        try {
+            val windowViewClass = XposedHelpers.findClass(
+                "miui.systemui.dynamicisland.window.DynamicIslandWindowView",
+                classLoader)
 
-        XposedHelpers.findAndHookMethod(clz, "setMaxIslandWidth",
-            object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        injectWidths(param.thisObject)
-                    } catch (e: Exception) {
-                        XposedBridge.log("DynamicIslandPort: width err — ${e.message}")
+            // After the window view is laid out, enforce correct position
+            XposedHelpers.findAndHookMethod(windowViewClass, "onLayout",
+                Boolean::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            fixPosition(param.thisObject as View)
+                        } catch (e: Exception) {
+                            XposedBridge.log("DynamicIslandPort: pos fix err — ${e.message}")
+                        }
                     }
-                }
-            })
+                })
+
+            XposedBridge.log("DynamicIslandPort: position hook installed")
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: WidthInjector err — ${e.message}")
+        }
     }
 
-    private fun injectWidths(controller: Any) {
-        val pc = XposedHelpers.getObjectField(controller,
-            "dynamicIslandPluginController") ?: return
-        val content = try {
-            XposedHelpers.callMethod(pc, "getContent")
-        } catch (_: Exception) { return }
-
-        val ic = try {
-            XposedHelpers.getObjectField(controller, "islandControllerImp")
-        } catch (_: Exception) { null }
-
-        val clockW = try {
-            (XposedHelpers.callMethod(ic, "getClockWidth") as? Int)?.toFloat() ?: 0f
-        } catch (_: Exception) { 0f }
-
-        val batteryW = try {
-            (XposedHelpers.callMethod(ic, "getBatteryWidth") as? Int)?.toFloat() ?: 0f
-        } catch (_: Exception) { 0f }
-
-        val ctx = XposedHelpers.getObjectField(controller, "context")
-            as? android.content.Context
-        val maxW = (ctx?.resources?.displayMetrics?.widthPixels ?: 0).toFloat()
-
-        val bundle = Bundle().apply {
-            putString("action_key", "action_island_max_width")
-            putFloat("extra_island_max_width", maxW)
-            putFloat("extra_island_clock_width", clockW)
-            putFloat("extra_island_battery_width", batteryW)
+    private fun fixPosition(view: View) {
+        // Only fix if view is positioned at the far left (offset issue)
+        if (view.translationX < 10f && view.x < 10f) {
+            // Get status bar width and center the island
+            val displayWidth = view.context.resources.displayMetrics.widthPixels.toFloat()
+            val islandWidth = view.width.toFloat()
+            if (islandWidth > 0) {
+                // Center the island in the status bar
+                val centerX = (displayWidth - islandWidth) / 2f
+                view.translationX = centerX
+                XposedBridge.log("DynamicIslandPort: position fixed (tx=$centerX)")
+            }
         }
-
-        XposedHelpers.callMethod(content, "handleDynamicIsland", bundle)
-        XposedBridge.log("DynamicIslandPort: width injected (max=$maxW clock=$clockW batt=$batteryW)")
     }
 }
