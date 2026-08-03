@@ -1,5 +1,7 @@
 package com.hubery.dynamicislandport
 
+import android.content.Context
+import android.os.Bundle
 import android.view.View
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -7,54 +9,86 @@ import de.robv.android.xposed.XposedHelpers
 
 object SignalInjector {
 
-    fun hook(pluginCL: ClassLoader) {
-        try {
-            val vcClass = pluginCL.loadClass(
-                "miui.systemui.dynamicisland.window.DynamicIslandWindowViewController")
-            val dataClass = pluginCL.loadClass(
-                "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
+    private var pluginCL: ClassLoader? = null
 
-            XposedHelpers.findAndHookMethod(vcClass, "addDynamicIslandView",
-                dataClass, Boolean::class.javaPrimitiveType,
+    fun hook(sysUiCL: ClassLoader) {
+        try {
+            val pcClass = XposedHelpers.findClass(
+                "com.android.systemui.statusbar.notification.DynamicIslandPluginController", sysUiCL)
+            XposedHelpers.findAndHookMethod(pcClass, "onPluginLoaded",
+                XposedHelpers.findClass("com.android.systemui.plugins.Plugin", sysUiCL),
+                Context::class.java,
+                XposedHelpers.findClass("com.android.systemui.plugins.PluginLifecycleManager", sysUiCL),
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        try { onContentAdded(param.args[0], pluginCL) }
-                        catch (_: Exception) {}
+                        if (pluginCL != null) return
+                        pluginCL = (param.args[0] as Any).javaClass.classLoader
+                        XposedBridge.log("DynamicIslandPort: CL ready")
+                        hookAddView()
                     }
                 })
-            XposedBridge.log("DynamicIslandPort: hooked")
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: err — ${e.message}")
         }
     }
 
-    private fun onContentAdded(data: Any, pcl: ClassLoader) {
-        val tickerJson = XposedHelpers.getObjectField(data, "tickerData") as? String ?: ""
-        if (tickerJson.isEmpty()) return
-
-        val obj = try { org.json.JSONObject(tickerJson) } catch (_: Exception) { return }
-        val big = obj.optJSONObject("bigIslandArea") ?: return
-        val swDigit = big.optJSONObject("sameWidthDigitInfo")
-        val timerInfo = swDigit?.optJSONObject("timerInfo")
-        val imgType = big.optJSONObject("imageTextInfoRight")?.optInt("type", -1) ?: -1
-        if (timerInfo == null && imgType !in 1..4) return
-
-        val scene = if (timerInfo != null) "timer" else "media"
-        XposedBridge.log("DynamicIslandPort: scene=$scene")
-
-        // Get animation delegate from content view list
+    private fun hookAddView() {
+        val pcl = pluginCL ?: return
         try {
-            val wv = findWindowView(pcl) ?: return
-            val list = XposedHelpers.getObjectField(wv, "contentViewList") as? List<*> ?: return
-            if (list.isEmpty()) return
+            val vcClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.window.DynamicIslandWindowViewController")
+            val dataClass = pcl.loadClass(
+                "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
+            XposedHelpers.findAndHookMethod(vcClass, "addDynamicIslandView",
+                dataClass, Boolean::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try { onContentAdded(param.args[0], pcl) }
+                        catch (_: Exception) {}
+                    }
+                })
+            XposedBridge.log("DynamicIslandPort: hooked")
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: hook err — ${e.message}")
+        }
+    }
+
+    private fun onContentAdded(data: Any, pcl: ClassLoader) {
+        val json = XposedHelpers.getObjectField(data, "tickerData") as? String ?: ""
+        if (json.isEmpty()) return
+        val obj = try { org.json.JSONObject(json) } catch (_: Exception) { return }
+        val big = obj.optJSONObject("bigIslandArea") ?: return
+        val swD = big.optJSONObject("sameWidthDigitInfo")
+        val isTimer = swD?.optJSONObject("timerInfo") != null
+        val imgT = big.optJSONObject("imageTextInfoRight")?.optInt("type", -1) ?: -1
+        val isMedia = imgT in 1..4
+        if (!isTimer && !isMedia) return
+
+        XposedBridge.log("DynamicIslandPort: scene=${if(isTimer) "timer" else "media"}")
+
+        try {
+            val wv = findWindowView(pcl) ?: run {
+                XposedBridge.log("DynamicIslandPort: windowView not found")
+                return
+            }
+            val list = XposedHelpers.getObjectField(wv, "contentViewList") as? List<*> ?: run {
+                XposedBridge.log("DynamicIslandPort: no contentViewList")
+                return
+            }
+            if (list.isEmpty()) { XposedBridge.log("DynamicIslandPort: list empty"); return }
             val cv = list[0] ?: return
-            val delegate = XposedHelpers.callMethod(cv, "getAnimatorDelegate") ?: return
+            XposedBridge.log("DynamicIslandPort: cv=${cv.javaClass.simpleName}")
+
+            val delegate = XposedHelpers.callMethod(cv, "getAnimatorDelegate") ?: run {
+                XposedBridge.log("DynamicIslandPort: delegate null")
+                return
+            }
             val cvClass = pcl.loadClass(
                 "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
             delegate.javaClass
                 .getDeclaredMethod("expandedToSmallIslandAnimation", cvClass)
                 .invoke(delegate, cv)
-            XposedBridge.log("DynamicIslandPort: anim triggered!")
+            XposedBridge.log("DynamicIslandPort: anim done!")
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: anim err — ${e.message}")
         }
@@ -66,9 +100,10 @@ object SignalInjector {
             val inst = wmg.getDeclaredMethod("getInstance").invoke(null)
             val f = wmg.getDeclaredField("mViews"); f.isAccessible = true
             @Suppress("UNCHECKED_CAST")
+            val wvClass = pcl.loadClass(
+                "miui.systemui.dynamicisland.window.DynamicIslandWindowView")
             for (root in f.get(inst) as? List<View> ?: emptyList()) {
-                if (pcl.loadClass("miui.systemui.dynamicisland.window.DynamicIslandWindowView")
-                        .isInstance(root)) return root
+                if (wvClass.isInstance(root)) return root
             }
         } catch (_: Exception) {}
         return null
