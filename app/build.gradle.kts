@@ -32,6 +32,5 @@ android {
 }
 
 dependencies {
-    // Xposed API — compileOnly, NOT packaged in APK
-    compileOnly("com.github.rovo89:XposedBridge:v89")
+    compileOnly(files("libs/xposed-api-stubs.jar"))
 }
