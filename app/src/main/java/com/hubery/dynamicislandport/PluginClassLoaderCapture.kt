@@ -84,6 +84,7 @@ object PluginClassLoaderCapture {
         }
 
         val obj = try { org.json.JSONObject(json) } catch (_: Exception) { return }
+        XposedBridge.log("DynamicIslandPort: business=${obj.optString("business")} bigArea=${obj.has("bigIslandArea")} smallArea=${obj.has("smallIslandArea")}")
         val big = obj.optJSONObject("bigIslandArea") ?: return
 
         // Timer scene: sameWidthDigitInfo.timerInfo present
@@ -113,7 +114,10 @@ object PluginClassLoaderCapture {
             resNames.add(if (isVideo) "charger_light_wave" else "voice_wave_big")
         }
 
-        if (resNames.isEmpty()) return
+        if (resNames.isEmpty()) {
+            XposedBridge.log("DynamicIslandPort: no scene match imgType=$imgType smallImg=$smallImgType timer=${timerInfo != null}")
+            return
+        }
 
         android.os.Handler(ctx.mainLooper).post {
             for (name in resNames) {
