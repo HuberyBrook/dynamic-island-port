@@ -1,20 +1,28 @@
 package com.hubery.dynamicislandport
 
-import android.os.Bundle
+import android.content.Context
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import java.lang.reflect.Constructor
 
 /**
- * Gets the plugin's ClassLoader via createPackageContext, then hooks
- * the size repository to inject correct clock/battery widths from SystemUI.
+ * Injects scene lottie animations into v16 plugin content views.
+ *
+ * Strategy: get plugin ClassLoader via createPackageContext, then
+ * use pure reflection to create and manipulate plugin-side objects
+ * (LottieAnimationView, etc.) to avoid ClassLoader type conflicts.
  */
 object PluginClassLoaderCapture {
 
     private const val PLUGIN_PKG = "miui.systemui.plugin"
+    private lateinit var pluginCL: ClassLoader
+    private lateinit var pluginCtx: Context
 
     fun hook(sysUiCL: ClassLoader) {
-        // Wait for SystemUI's Application to be ready, then get plugin Context
         val appClass = XposedHelpers.findClass(
             "com.android.systemui.SystemUIApplication", sysUiCL)
 
@@ -22,68 +30,127 @@ object PluginClassLoaderCapture {
             object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
-                        val app = param.thisObject as android.content.Context
-                        val pluginCtx = app.createPackageContext(
-                            PLUGIN_PKG,
-                            android.content.Context.CONTEXT_INCLUDE_CODE or
-                            android.content.Context.CONTEXT_IGNORE_SECURITY)
-                        val pluginCL = pluginCtx.classLoader
-
+                        val app = param.thisObject as Context
+                        pluginCtx = app.createPackageContext(PLUGIN_PKG,
+                            Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY)
+                        pluginCL = pluginCtx.classLoader
                         XposedBridge.log("DynamicIslandPort: plugin CL obtained")
-                        hookSizeRepo(pluginCL, app)
+                        hookBinder()
                     } catch (e: Exception) {
-                        XposedBridge.log("DynamicIslandPort: plugin ctx err — ${e.message}")
+                        XposedBridge.log("DynamicIslandPort: init err — ${e.message}")
                     }
                 }
             })
     }
 
-    private fun hookSizeRepo(pluginCL: ClassLoader, sysUiCtx: android.content.Context) {
+    // ── Hook: IslandSameWidthDigitViewHolder.bind ──────────────────────
+
+    private fun hookBinder() {
         try {
-            val repoClass = Class.forName(
-                "miui.systemui.dynamicisland.data.repository.DynamicIslandSizeRepository",
-                false, pluginCL)
+            val holderClass = pluginCL.loadClass(
+                "miui.systemui.dynamicisland.module.IslandSameWidthDigitViewHolder")
 
-            // Hook updateIslandMaxWidth(float maxW, float clockW, float batteryW)
-            XposedHelpers.findAndHookMethod(repoClass, "updateIslandMaxWidth",
-                Float::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val maxW = param.args[0] as Float
-                        val clockW = param.args[1] as Float
-                        val batteryW = param.args[2] as Float
+            // Find bind method with SameWidthDigitInfo param
+            val infoClass = pluginCL.loadClass(
+                "miui.systemui.dynamicisland.model.SameWidthDigitInfo")
 
-                        // If widths are defaults (-1 or 0), inject correct values
-                        if (clockW <= 0f || batteryW <= 0f) {
-                            // Get systemUI's island controller for real widths
-                            val sic = try {
-                                XposedHelpers.callMethod(
-                                    sysUiCtx.getSystemService("statusbar"),
-                                    "getStatusBarIslandController")
-                            } catch (_: Exception) { null }
-
-                            val realClock = try {
-                                XposedHelpers.callMethod(sic, "getClockWidth") as? Int
-                            } catch (_: Exception) { null } ?: 0
-
-                            val realBattery = try {
-                                XposedHelpers.callMethod(sic, "getBatteryWidth") as? Int
-                            } catch (_: Exception) { null } ?: 0
-
-                            if (realClock > 0) param.args[1] = realClock.toFloat()
-                            if (realBattery > 0) param.args[2] = realBattery.toFloat()
-
-                            XposedBridge.log(
-                                "DynamicIslandPort: size injected cw=$realClock bw=$realBattery")
-                        }
-                    }
-                })
-
-            XposedBridge.log("DynamicIslandPort: size repo hooked")
+            for (m in holderClass.declaredMethods) {
+                if (m.name != "bind") continue
+                val pts = m.parameterTypes
+                if (pts.size >= 1 && pts[0] == infoClass) {
+                    // Hook using Object varargs to avoid type mismatch
+                    XposedHelpers.findAndHookMethod(holderClass, "bind",
+                        *pts,  // original param types
+                        object : XC_MethodHook() {
+                            override fun afterHookedMethod(param: MethodHookParam) {
+                                try { injectHourglass(param.args[0], param.thisObject) }
+                                catch (e: Exception) {
+                                    XposedBridge.log(
+                                        "DynamicIslandPort: hourglass err — ${e.message}")
+                                }
+                            }
+                        })
+                    XposedBridge.log("DynamicIslandPort: timer binder hooked")
+                    return
+                }
+            }
+            XposedBridge.log("DynamicIslandPort: bind(info) not found")
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: size repo err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: binder err — ${e.message}")
         }
     }
+
+    // ── Hourglass injection ────────────────────────────────────────────
+
+    private fun injectHourglass(info: Any, holder: Any) {
+        // Check timerInfo presence
+        val timerInfo = XposedHelpers.getObjectField(info, "timerInfo") ?: return
+        val timerType = XposedHelpers.getIntField(timerInfo, "timerType")
+
+        // Get itemView root
+        val itemView = try {
+            XposedHelpers.callMethod(holder, "getItemView") as? View
+        } catch (_: Exception) {
+            XposedHelpers.getObjectField(holder, "itemView") as? View
+        } ?: return
+
+        // Already injected?
+        if (itemView.findViewWithTag<View>("lottie_hg") != null) return
+
+        // Load lottie resource ID from plugin
+        val resName = if (timerType < 0) "hourglass" else "hourglass_big"
+        val resId = pluginCtx.resources.getIdentifier(resName, "raw", PLUGIN_PKG)
+        if (resId == 0) {
+            XposedBridge.log("DynamicIslandPort: res $resName not found")
+            return
+        }
+
+        // Create LottieAnimationView via reflection (plugin ClassLoader)
+        val lottieView = createLottieView(resId) ?: return
+        lottieView.tag = "lottie_hg"
+
+        // Add to parent layout
+        val parent = itemView.parent as? ViewGroup ?: return
+        if (parent is FrameLayout) {
+            val size = (itemView.height * 1.3f).toInt().coerceAtLeast(44)
+            val lp = FrameLayout.LayoutParams(size, size)
+            lp.gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+            lp.marginEnd = 4.dpToPx()
+            parent.addView(lottieView, lp)
+
+            // Play
+            XposedHelpers.callMethod(lottieView, "playAnimation")
+            XposedBridge.log("DynamicIslandPort: hourglass added ($resName type=$timerType)")
+        }
+    }
+
+    // ── Reflection helpers for plugin-side objects ─────────────────────
+
+    private fun createLottieView(resId: Int): View? {
+        return try {
+            val lavClass = pluginCL.loadClass("com.airbnb.lottie.LottieAnimationView")
+            val ctor: Constructor<*> = lavClass.getConstructor(Context::class.java)
+            val view = ctor.newInstance(pluginCtx) as View
+
+            // setAnimation(resId)
+            XposedHelpers.callMethod(view, "setAnimation", resId)
+            // setRepeatCount(INFINITE)
+            val infField = pluginCL.loadClass("com.airbnb.lottie.LottieDrawable")
+                .getField("INFINITE")
+            val infinite = infField.getInt(null)
+            XposedHelpers.callMethod(view, "setRepeatCount", infinite)
+            // setRepeatMode(RESTART)
+            val restartField = pluginCL.loadClass("com.airbnb.lottie.LottieDrawable")
+                .getField("RESTART")
+            XposedHelpers.callMethod(view, "setRepeatMode", restartField.getInt(null))
+
+            view
+        } catch (e: Exception) {
+            XposedBridge.log("DynamicIslandPort: createLottie err — ${e.message}")
+            null
+        }
+    }
+
+    private fun Int.dpToPx(): Int =
+        (this * pluginCtx.resources.displayMetrics.density + 0.5f).toInt()
 }
