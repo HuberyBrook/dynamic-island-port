@@ -17,9 +17,11 @@ object PluginClassLoaderCapture {
 
     private const val PLUGIN_PKG = "miui.systemui.plugin"
     private lateinit var pluginCL: ClassLoader
+    private lateinit var sysUiCL: ClassLoader
     private lateinit var pluginCtx: Context
 
-    fun hook(sysUiCL: ClassLoader) {
+    fun hook(sysUiLoader: ClassLoader) {
+        sysUiCL = sysUiLoader
         val appClass = XposedHelpers.findClass(
             "com.android.systemui.SystemUIApplication", sysUiCL)
 
@@ -48,7 +50,7 @@ object PluginClassLoaderCapture {
                 "miui.systemui.dynamicisland.module.IslandSameWidthDigitViewHolder")
             val templateClass = pluginCL.loadClass(
                 "miui.systemui.dynamicisland.model.IslandTemplate")
-            val dataClass = Class.forName(
+            val dataClass = sysUiCL.loadClass(
                 "com.android.systemui.plugins.miui.dynamicisland.DynamicIslandData")
 
             XposedHelpers.findAndHookMethod(holderClass, "bind",
