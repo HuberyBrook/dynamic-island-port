@@ -79,19 +79,27 @@ object PluginClassLoaderCapture {
         val obj = try { org.json.JSONObject(tickerJson) } catch (_: Exception) { return }
         val big = obj.optJSONObject("bigIslandArea") ?: return
 
-        // Timer: sameWidthDigitInfo.timerInfo
+        // Timer scene
         val swDigit = big.optJSONObject("sameWidthDigitInfo")
         val timerInfo = swDigit?.optJSONObject("timerInfo")
-        val resName: String? = if (timerInfo != null) "hourglass" else null
 
-        if (resName == null) return
+        // Audio scene: imageTextInfoRight type 1-4 = media content
+        val imgRight = big.optJSONObject("imageTextInfoRight")
+        val imgType = imgRight?.optInt("type", -1) ?: -1
 
-        val resId = ctx.resources.getIdentifier(resName, "raw", PLUGIN_PKG)
-        if (resId == 0) return
+        val resNames = mutableListOf<String>()
+        if (timerInfo != null) resNames.add("hourglass")
+        if (imgType in 1..4) resNames.add("voice_wave_big")
+
+        if (resNames.isEmpty()) return
 
         android.os.Handler(ctx.mainLooper).post {
-            try { injectLottie(resId, ctx, pcl, key + "_" + resName) }
-            catch (_: Exception) {}
+            for (name in resNames) {
+                val resId = ctx.resources.getIdentifier(name, "raw", PLUGIN_PKG)
+                if (resId == 0) continue
+                try { injectLottie(resId, ctx, pcl, key + "_" + name) }
+                catch (_: Exception) {}
+            }
         }
     }
 
