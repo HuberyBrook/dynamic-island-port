@@ -1,43 +1,40 @@
 package com.hubery.dynamicislandport
 
 import android.view.View
-import dalvik.system.PathClassLoader
+import android.view.WindowManager
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * Fixes v17 plugin position offset by hooking the plugin's own classes.
- * Plugin classes are in a separate ClassLoader — we use PathClassLoader
- * to load them from the APK path.
+ * Fixes v17 plugin position offset.
+ * Intercepts DynamicIslandWindowView via onAttachedToWindow and
+ * adjusts its WindowManager.LayoutParams x position to screen center.
  */
 object WidthInjector {
 
-    private const val PLUGIN_PATH = "/product/app/MIUISystemUIPlugin/MIUISystemUIPlugin.apk"
-    private const val WINDOW_VIEW = "miui.systemui.dynamicisland.window.DynamicIslandWindowView"
+    fun hook(classLoader: ClassLoader) {
+        XposedHelpers.findAndHookMethod(View::class.java, "onAttachedToWindow",
+            object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val view = param.thisObject as View
+                    if (!view.javaClass.name.contains("DynamicIslandWindowView")) return
 
-    fun hook(sysuiClassLoader: ClassLoader) {
-        try {
-            val pluginCL = PathClassLoader(PLUGIN_PATH, sysuiClassLoader)
-            val windowViewClass = Class.forName(WINDOW_VIEW, false, pluginCL)
-
-            XposedHelpers.findAndHookMethod(windowViewClass, "setTranslationX",
-                Float::class.javaPrimitiveType,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val view = param.thisObject as View
-                        val tx = param.args[0] as Float
-                        if (tx < 100f && view.width > 0) {
-                            val dw = view.context.resources.displayMetrics.widthPixels.toFloat()
-                            val cx = (dw - view.width) / 2f
-                            param.args[0] = cx
+                    try {
+                        val lp = view.layoutParams as? WindowManager.LayoutParams ?: return
+                        val dw = view.context.resources.displayMetrics.widthPixels
+                        val cx = (dw - lp.width) / 2
+                        if (lp.x < 100 && cx > 0) {
+                            lp.x = cx
+                            view.layoutParams = lp
+                            XposedBridge.log("DynamicIslandPort: island pos fixed x=$cx")
                         }
+                    } catch (e: Exception) {
+                        XposedBridge.log("DynamicIslandPort: pos fix err — ${e.message}")
                     }
-                })
+                }
+            })
 
-            XposedBridge.log("DynamicIslandPort: position hook installed via PathClassLoader")
-        } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: WidthInjector err — ${e.message}")
-        }
+        XposedBridge.log("DynamicIslandPort: position hook installed (onAttachedToWindow)")
     }
 }
