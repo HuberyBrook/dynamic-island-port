@@ -31,12 +31,12 @@ object SignalInjector {
                 "com.android.systemui.statusbar.notification.DynamicIslandController", cl)
 
             // Capture controller reference for later use
-            XposedHelpers.findAndHookMethod(ctrlClass, "onIslandViewChanged",
-                Bundle::class.java,
+            // Hook onDynamicPluginCallback — called by plugin when content state changes
+            XposedHelpers.findAndHookMethod(ctrlClass, "onDynamicPluginCallback",
+                String::class.java, Bundle::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         controllerRef = java.lang.ref.WeakReference(param.thisObject)
-                        // After original handling, send extra dimension data
                         try { sendExtraSignals(param.thisObject) }
                         catch (_: Exception) {}
                     }
