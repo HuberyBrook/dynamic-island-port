@@ -7,19 +7,20 @@ import android.widget.FrameLayout
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import java.io.BufferedReader
+import java.io.InputStreamReader
 
 /**
- * Injects scene lottie animations into v16 plugin.
- * Handles scenes that SuperIslandLyric doesn't cover:
- * - Timer hourglass
- * - Charger ripple
- * - Alarm
+ * Injects lottie animations for audio/video + timer scenes.
+ * Lottie JSON files bundled in module's res/raw/ for full control.
  */
 object PluginClassLoaderCapture {
 
     private const val PLUGIN_PKG = "miui.systemui.plugin"
+    private const val MODULE_PKG = "com.hubery.dynamicislandport"
     private var pluginCL: ClassLoader? = null
     private var pluginCtx: Context? = null
+    private var moduleCtx: Context? = null
 
     fun hook(sysUiCL: ClassLoader) {
         try {
@@ -34,10 +35,10 @@ object PluginClassLoaderCapture {
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (pluginCL != null) return
-                        val plugin = param.args[0]
-                        pluginCL = plugin.javaClass.classLoader
+                        pluginCL = (param.args[0] as Any).javaClass.classLoader
                         val sysCtx = XposedHelpers.getObjectField(param.thisObject, "context") as? Context
                         pluginCtx = sysCtx?.createPackageContext(PLUGIN_PKG, 0)
+                        moduleCtx = sysCtx?.createPackageContext(MODULE_PKG, 0)
                         XposedBridge.log("DynamicIslandPort: plugin ready")
                         hookAddView()
                     }
@@ -50,7 +51,6 @@ object PluginClassLoaderCapture {
 
     private fun hookAddView() {
         val pcl = pluginCL ?: return
-        val ctx = pluginCtx ?: return
         try {
             val vcClass = pcl.loadClass(
                 "miui.systemui.dynamicisland.window.DynamicIslandWindowViewController")
@@ -61,7 +61,7 @@ object PluginClassLoaderCapture {
                 dataClass, Boolean::class.javaPrimitiveType,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        try { onContentAdded(param.args[0], ctx, pcl) }
+                        try { onContentAdded(param.args[0]) }
                         catch (_: Exception) {}
                     }
                 })
@@ -71,7 +71,7 @@ object PluginClassLoaderCapture {
         }
     }
 
-    private fun onContentAdded(data: Any, ctx: Context, pcl: ClassLoader) {
+    private fun onContentAdded(data: Any) {
         val key = XposedHelpers.getObjectField(data, "key") as? String ?: ""
         val tickerJson = XposedHelpers.getObjectField(data, "tickerData") as? String ?: ""
         if (tickerJson.isEmpty()) return
@@ -79,44 +79,52 @@ object PluginClassLoaderCapture {
         val obj = try { org.json.JSONObject(tickerJson) } catch (_: Exception) { return }
         val big = obj.optJSONObject("bigIslandArea") ?: return
 
-        // Timer scene
         val swDigit = big.optJSONObject("sameWidthDigitInfo")
         val timerInfo = swDigit?.optJSONObject("timerInfo")
 
-        // Audio scene: imageTextInfoRight type 1-4 = media content
         val imgRight = big.optJSONObject("imageTextInfoRight")
         val imgType = imgRight?.optInt("type", -1) ?: -1
 
-        val resNames = mutableListOf<String>()
-        if (timerInfo != null) resNames.add("hourglass")
-        if (imgType in 1..4) resNames.add("voice_wave_big")
+        val business = obj.optString("business", "")
+        val isVideo = business.contains("video", ignoreCase = true)
 
-        if (resNames.isEmpty()) return
+        // Scene → our bundled lottie resource name
+        val resName = when {
+            timerInfo != null -> "hourglass"  // still from plugin, or we can bundle
+            imgType in 1..4 && isVideo -> "video_ripple"
+            imgType in 1..4 -> "music_pulse"
+            else -> return
+        }
 
-        android.os.Handler(ctx.mainLooper).post {
-            for (name in resNames) {
-                val resId = ctx.resources.getIdentifier(name, "raw", PLUGIN_PKG)
-                if (resId == 0) continue
-                try { injectLottie(resId, ctx, pcl, key + "_" + name) }
-                catch (_: Exception) {}
-            }
+        val jsonStr = readModuleRaw(resName) ?: return
+        if (jsonStr.isEmpty()) return
+
+        android.os.Handler(pluginCtx!!.mainLooper).post {
+            try { injectLottie(jsonStr, key + "_" + resName) }
+            catch (_: Exception) {}
         }
     }
 
-    private fun injectLottie(resId: Int, ctx: Context, cl: ClassLoader, tag: String) {
+    private fun injectLottie(jsonStr: String, tag: String) {
+        val ctx = pluginCtx ?: return
+        val cl = pluginCL ?: return
+
         val parent = findContentParent() ?: return
         if (parent.findViewWithTag<View>(tag) != null) return
 
-        val lottie = createLottieView(resId, ctx, cl) ?: return
+        val lottie = createLottieFromJson(jsonStr, ctx, cl) ?: return
         lottie.tag = tag
 
         val size = (50 * ctx.resources.displayMetrics.density + 0.5f).toInt()
         val lp = FrameLayout.LayoutParams(size, size)
         lp.gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+        lp.marginEnd = (4 * ctx.resources.displayMetrics.density + 0.5f).toInt()
         parent.addView(lottie, lp)
         XposedHelpers.callMethod(lottie, "playAnimation")
         XposedBridge.log("DynamicIslandPort: lottie $tag added")
     }
+
+    // ── View finding ───────────────────────────────────────────────────
 
     private fun findContentParent(): ViewGroup? {
         try {
@@ -139,17 +147,29 @@ object PluginClassLoaderCapture {
         return null
     }
 
-    private fun createLottieView(resId: Int, ctx: Context, cl: ClassLoader): View? {
+    // ── Lottie creation ────────────────────────────────────────────────
+
+    private fun createLottieFromJson(json: String, ctx: Context, cl: ClassLoader): View? {
         return try {
             val lav = cl.loadClass("com.airbnb.lottie.LottieAnimationView")
             val view = lav.getConstructor(Context::class.java).newInstance(ctx) as View
-            XposedHelpers.callMethod(view, "setAnimation", Integer.valueOf(resId))
+            XposedHelpers.callMethod(view, "setAnimationFromJson", json)
             XposedHelpers.callMethod(view, "setRepeatCount", -1)
             XposedHelpers.callMethod(view, "setRepeatMode", 2)
             view
         } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: lottie err — ${e.message}")
+            XposedBridge.log("DynamicIslandPort: lottie create err — ${e.message}")
             null
         }
+    }
+
+    private fun readModuleRaw(name: String): String? {
+        val ctx = moduleCtx ?: return null
+        val resId = ctx.resources.getIdentifier(name, "raw", MODULE_PKG)
+        if (resId == 0) return null
+        return try {
+            val stream = ctx.resources.openRawResource(resId)
+            BufferedReader(InputStreamReader(stream)).readText()
+        } catch (_: Exception) { null }
     }
 }
