@@ -181,14 +181,11 @@ object PluginClassLoaderCapture {
     private fun createLottieView(resId: Int, ctx: Context, cl: ClassLoader): View? {
         return try {
             val lav = cl.loadClass("com.airbnb.lottie.LottieAnimationView")
-            XposedBridge.log("DynamicIslandPort: LAV class=$lav cl=${lav.classLoader}")
-            val ctor = lav.getConstructor(Context::class.java)
-            val view = ctor.newInstance(ctx) as View
-            XposedBridge.log("DynamicIslandPort: LAV instance created")
+            val view = lav.getConstructor(Context::class.java).newInstance(ctx) as View
             XposedHelpers.callMethod(view, "setAnimation", Integer.valueOf(resId))
-            val ld = cl.loadClass("com.airbnb.lottie.LottieDrawable")
-            XposedHelpers.callMethod(view, "setRepeatCount", ld.getField("INFINITE").getInt(null))
-            XposedHelpers.callMethod(view, "setRepeatMode", ld.getField("RESTART").getInt(null))
+            // INFINITE = -1, RESTART = 2 — hardcode since LottieDrawable missing
+            XposedHelpers.callMethod(view, "setRepeatCount", -1)
+            XposedHelpers.callMethod(view, "setRepeatMode", 2)
             view
         } catch (e: Exception) {
             XposedBridge.log("DynamicIslandPort: lottie err — ${e.javaClass.simpleName}: ${e.message}")
