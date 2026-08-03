@@ -29,16 +29,44 @@ object PluginClassLoaderCapture {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val app = param.thisObject as Context
-                        pluginCtx = app.createPackageContext(PLUGIN_PKG,
-                            Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY)
-                        pluginCL = pluginCtx.classLoader
-                        XposedBridge.log("DynamicIslandPort: plugin CL obtained")
+                        pluginCtx = app.createPackageContext(PLUGIN_PKG, 0)
+                        pluginCL = findPluginClassLoader()
+                        if (pluginCL == null) {
+                            XposedBridge.log("DynamicIslandPort: plugin CL not found")
+                            return
+                        }
+                        XposedBridge.log("DynamicIslandPort: plugin CL found")
                         hookAddView()
                     } catch (e: Exception) {
                         XposedBridge.log("DynamicIslandPort: init err — ${e.message}")
                     }
                 }
             })
+    }
+
+    private fun findPluginClassLoader(): ClassLoader? {
+        val targetClass = "miui.systemui.dynamicisland.window.DynamicIslandWindowViewController"
+        // Check all threads' context ClassLoaders
+        for (thread in Thread.getAllStackTraces().keys) {
+            try {
+                Class.forName(targetClass, false, thread.contextClassLoader)
+                return thread.contextClassLoader
+            } catch (_: ClassNotFoundException) {}
+        }
+        // Walk SystemUI ClassLoader tree
+        return findInTree(ClassLoader.getSystemClassLoader(), targetClass)
+    }
+
+    private fun findInTree(cl: ClassLoader, target: String): ClassLoader? {
+        try {
+            Class.forName(target, false, cl)
+            return cl
+        } catch (_: ClassNotFoundException) {}
+        // Try parent
+        cl.parent?.let {
+            findInTree(it, target)?.let { return it }
+        }
+        return null
     }
 
     // ── Hook: DynamicIslandWindowViewController.addDynamicIslandView ───
