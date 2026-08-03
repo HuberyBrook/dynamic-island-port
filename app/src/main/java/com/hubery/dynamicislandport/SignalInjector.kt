@@ -66,32 +66,35 @@ object SignalInjector {
 
         XposedBridge.log("DynamicIslandPort: scene=${if(isTimer) "timer" else "media"}")
 
-        try {
-            val wv = findWindowView(pcl) ?: run {
-                XposedBridge.log("DynamicIslandPort: windowView not found")
-                return
-            }
-            val list = XposedHelpers.getObjectField(wv, "contentViewList") as? List<*> ?: run {
-                XposedBridge.log("DynamicIslandPort: no contentViewList")
-                return
-            }
-            if (list.isEmpty()) { XposedBridge.log("DynamicIslandPort: list empty"); return }
-            val cv = list[0] ?: return
-            XposedBridge.log("DynamicIslandPort: cv=${cv.javaClass.simpleName}")
+        // Post delayed — delegate isn't ready yet during addDynamicIslandView
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+                val wv = findWindowView(pcl) ?: run {
+                    XposedBridge.log("DynamicIslandPort: wv null")
+                    return@postDelayed
+                }
+                val list = XposedHelpers.getObjectField(wv, "contentViewList") as? List<*> ?: return@postDelayed
+                if (list.isEmpty()) return@postDelayed
+                val cv = list[0] ?: return@postDelayed
 
-            val delegate = XposedHelpers.callMethod(cv, "getAnimatorDelegate") ?: run {
-                XposedBridge.log("DynamicIslandPort: delegate null")
-                return
+                val f = cv.javaClass.superclass?.getDeclaredField("animatorDelegate")
+                    ?: cv.javaClass.getDeclaredField("animatorDelegate")
+                f.isAccessible = true
+                val delegate = f.get(cv) ?: run {
+                    XposedBridge.log("DynamicIslandPort: delegate still null")
+                    return@postDelayed
+                }
+                val cvClass = pcl.loadClass(
+                    "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
+                delegate.javaClass
+                    .getDeclaredMethod("expandedToSmallIslandAnimation", cvClass)
+                    .invoke(delegate, cv)
+                XposedBridge.log("DynamicIslandPort: anim done!")
+            } catch (e: Exception) {
+                XposedBridge.log("DynamicIslandPort: anim err — ${e.message}")
             }
-            val cvClass = pcl.loadClass(
-                "miui.systemui.dynamicisland.window.content.DynamicIslandContentView")
-            delegate.javaClass
-                .getDeclaredMethod("expandedToSmallIslandAnimation", cvClass)
-                .invoke(delegate, cv)
-            XposedBridge.log("DynamicIslandPort: anim done!")
-        } catch (e: Exception) {
-            XposedBridge.log("DynamicIslandPort: anim err — ${e.message}")
-        }
+        }, 500)
+        XposedBridge.log("DynamicIslandPort: delayed check scheduled")
     }
 
     private fun findWindowView(pcl: ClassLoader): Any? {
